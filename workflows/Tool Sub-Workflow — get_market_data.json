@@ -1,0 +1,89 @@
+{
+  "name": "Tool Sub-Workflow — get_market_data",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        64,
+        192
+      ],
+      "id": "f4ccdc3d-5348-4d1c-8d65-188b57e1ba14"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first()?.json;\n\nif (!row || Object.keys(row).length === 0) {\n  return [{ json: { found: false, message: 'No market data for this area/beds combination.' } }];\n}\n\nreturn [{\n  json: {\n    found: true,\n    area: row.area,\n    beds: row.beds,\n    avg_sale_price: row.avg_sale_price,\n    avg_rent_annual: row.avg_rent_annual,\n    avg_price_sqft: row.avg_price_sqft,\n    data_date: row.data_date,\n    formatted: `In ${row.area}, ${row.beds}BR units currently average AED ${Number(row.avg_sale_price).toLocaleString()} for sale and AED ${Number(row.avg_rent_annual).toLocaleString()}/year for rent (data: ${row.data_date}).`\n  }\n}];"
+      },
+      "name": "Format result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        192
+      ],
+      "id": "05d15be9-00c8-44ed-bd5c-1c2d7c4535c5"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM market_data\nWHERE \n  area ILIKE '%{{ $json.query }}%'\n  OR '{{ $json.query }}' ILIKE '%' || area || '%'\nORDER BY data_date DESC\nLIMIT 5;\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        320,
+        192
+      ],
+      "id": "eb9c2736-4295-49e4-bfbb-74b0e80a43f7",
+      "name": "Execute a SQL query",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_API_KEY",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Format result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3d31a0ce-f19b-4309-b799-d9c3ab7df5d8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "BytQYE435Fabr2cg",
+  "tags": []
+}

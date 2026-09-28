@@ -1,0 +1,90 @@
+{
+  "name": "Tool Sub-Workflow — send_telegram",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "67b39478-a0e9-4805-bb69-f0c3b3e91868",
+      "notes": "This is the entry point when the AI Agent calls this tool."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute Workflow Trigger').item.json.chat_id }}",
+        "text": "={{ $('Execute Workflow Trigger').item.json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "e9b1a1b6-cee8-427d-8983-2eff19826e61",
+      "name": "Send a text message",
+      "webhookId": "b1b99e28-6c6c-4efe-8f66-384a348a9f1d",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true, message_sent: $('Execute Workflow Trigger').item.json.message } }];"
+      },
+      "name": "Return success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        0
+      ],
+      "id": "b5e60f1c-da7b-4176-937b-2fb558788e60"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Return success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "f5185cec-fc58-48d8-8a2f-6f0f7b2d88a0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "eIGSVp0CbLYF8B12",
+  "tags": []
+}

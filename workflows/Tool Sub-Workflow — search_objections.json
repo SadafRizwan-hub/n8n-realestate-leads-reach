@@ -1,0 +1,114 @@
+{
+  "name": "Tool Sub-Workflow — search_objections",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "c9fb0542-ed0d-4a37-bf35-1d36b9fa3568"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nlet output;\n\nif (!data.found) {\n  output = data.message;\n} else {\n  output = `MATCHED OBJECTION SCRIPT:\nScript: ${data.best_script}\nFollow-up question: ${data.followup_question || 'N/A'}\nSuccess signal to watch for: ${data.success_signal || 'N/A'}\n\n(${data.matches.length} similar objection${data.matches.length > 1 ? 's' : ''} found in total — use the best one above as your primary guide, adapt tone to the owner's message.)`;\n}\n\nreturn [{\n  json: {\n    tool_output: output\n  }\n}];"
+      },
+      "name": "Format results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        0
+      ],
+      "id": "ccd29cb0-e615-4508-b945-50fb019ebd9d",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT source_id, title, category, ai_script, followup_question, success_signal\nFROM objections\nWHERE category = '{{ $json.category_hint }}'\nORDER BY CAST(REGEXP_REPLACE(source_id, '[^0-9]', '', 'g') AS integer) ASC\nLIMIT 3",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        208,
+        0
+      ],
+      "id": "438622ee-cc0f-4eb0-a76c-c23b819e381b",
+      "name": "Execute a SQL query",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_API_KEY",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all()\n  .map(i => i.json)\n  .filter(r => r && Object.keys(r).length > 0);\n\nif (results.length === 0) {\n  return [{ json: {\n    found: false,\n    message: \"No pre-written script matched this objection. Use your own judgement, tone, and general Dubai real estate knowledge to respond naturally and address the owner's concern.\"\n  } }];\n}\n\nreturn [{ json: {\n  found: true,\n  matches: results,\n  best_script: results[0].ai_script,\n  followup_question: results[0].followup_question,\n  success_signal: results[0].success_signal\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "431822a3-d46b-4c64-a827-1cf8fb6d0220",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Format results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "7c809cc9-3f77-41d7-ae3f-ed65f01a2b70",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "HVaF7hlraXUk9TJT",
+  "tags": []
+}

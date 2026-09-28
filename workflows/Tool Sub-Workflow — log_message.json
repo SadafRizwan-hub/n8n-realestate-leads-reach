@@ -1,0 +1,114 @@
+{
+  "name": "Tool Sub-Workflow — log_message",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "b5745e49-aab9-44af-9cab-c5e85f2f1ac4"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true, logged: true } }];"
+      },
+      "name": "Return result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "id": "9f88acb0-6e69-4859-a701-2d1abdbe8900"
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "conversation_id",
+              "fieldValue": "={{ $json.conversation_id }}"
+            },
+            {
+              "fieldId": "sender",
+              "fieldValue": "={{ $json.sender }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.content }}"
+            },
+            {
+              "fieldId": "intent_detected",
+              "fieldValue": "={{ $json.intent_detected || null }}"
+            },
+            {
+              "fieldId": "conversation_stage",
+              "fieldValue": "={{ $json.stage || null }}"
+            },
+            {
+              "fieldId": "sent_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "name": "update message table",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "113542a4-4946-4d97-96f3-fc8d231e57be",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Supabase account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "update message table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "update message table": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "28954af1-acc0-4d93-b050-b54fd2179926",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "QxQNa8vFNRxQAq6V",
+  "tags": []
+}

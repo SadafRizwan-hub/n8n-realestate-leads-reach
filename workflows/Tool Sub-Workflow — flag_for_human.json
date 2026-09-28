@@ -1,0 +1,149 @@
+{
+  "name": "Tool Sub-Workflow — flag_for_human",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "dbda82c1-ad05-4589-992d-9cc1c2299942"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true, flagged: true, message: 'Human agent has been notified. Conversation paused for review.' } }];"
+      },
+      "name": "Return result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        0
+      ],
+      "id": "1cf65b99-6e93-40a6-90ed-8967f7acabca"
+    },
+    {
+      "parameters": {
+        "sendTo": "ajlongint.life100@gmail.com, destinationbeautiful00@gmail.com",
+        "subject": "=HUMAN REVIEW NEEDED — {{ $json.owner_id }}",
+        "emailType": "text",
+        "message": "={{ 'Owner ID: ' + $json.owner_id + '\\n\\nReason: ' + $json.reason + '\\n\\nSummary: ' + $json.summary }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "eedb02d5-6854-4f6f-9932-659714d2b521",
+      "name": "Send a message",
+      "webhookId": "9265c323-921a-48c2-adc6-e607210b7bd1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_API_KEY",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "owners",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Execute Workflow Trigger').item.json.owner_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "=human_review"
+            },
+            {
+              "fieldId": "last_contact_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "fieldId": "follow_up_count",
+              "fieldValue": "=0"
+            }
+          ]
+        }
+      },
+      "name": "Supabase — update state",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "1fccb780-2ac4-43d4-944d-2c6e8249424e",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Supabase account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Supabase — update state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase — update state": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e4d4e47e-7afd-41b0-82de-c73a8518fea6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "oPFYYiT1QUCldtp3",
+  "tags": []
+}

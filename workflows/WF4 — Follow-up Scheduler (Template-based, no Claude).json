@@ -1,0 +1,389 @@
+{
+  "name": "WF4 — Follow-up Scheduler (Template-based, no Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "\n// ============================================================\n// FOLLOW-UP TEMPLATES — NO CLAUDE CALL\n// 3 attempts × 2 languages = 6 templates\n// Injected variables: first_name, area, avg_sale_price/avg_rent\n// Language from owner.language (set by regex in WF3)\n// ============================================================\n\nconst owner = $('Get overdue owners').item.json;\nconst firstName = (owner.owner_name || 'there').split(' ')[0];\nconst area = owner.area || 'Dubai';\nconst lang = owner.language || 'en';\nconst attempt = (owner.follow_up_count || 0) + 1;\nconst txType = (owner.transaction_type || 'sale').toLowerCase();\nconst isArabic = lang === 'ar';\n\n// Load most recent message for context\nconst recentMsgs = $('Load recent messages').all().map(i => i.json);\nconst lastAgentMsg = recentMsgs.find(m => m.sender === 'agent')?.content || '';\n\n// ---- ATTEMPT 1: Warm check-in — assume they were busy ----\nconst attempt1 = {\n  en: `Hey ${firstName} — just wanted to check if you had a chance to look into this. No rush at all, whenever suits you.`,\n  ar: `هلا ${firstName} — بس أتحقق إذا عندك فرصة تطلع على الموضوع. ما في ضغط، وقتك مناسب.`\n};\n\n// ---- ATTEMPT 2: Market insight angle — add urgency ----\nconst attempt2 = {\n  en: `${firstName}, quick update — we've had strong enquiry activity in ${area} this week. ${txType === 'rental' ? 'Rental demand is up.' : 'Buyer interest is high right now.'} Just wanted to keep you in the loop in case timing matters.`,\n  ar: `${firstName}، تحديث سريع — عندنا اهتمام قوي بمنطقة ${area} هذا الأسبوع. ${txType === 'rental' ? 'الطلب على الإيجار مرتفع.' : 'المشترين جادين الحين.'} أردت أعلمك في حال الوقت مهم.`\n};\n\n// ---- ATTEMPT 3: Graceful exit — leave door open ----\nconst attempt3 = {\n  en: `No worries at all ${firstName} — I completely understand timing isn't always right. If anything changes or you'd like to revisit this, you know where I am. Take care!`,\n  ar: `لا مشكلة إطلاقاً ${firstName} — أفهم تماماً إن الوقت مو دايماً مناسب. لو تغير شيء أو أردت نتكلم مرة ثانية، أنا هنا. تسلم!`\n};\n\nconst templates = { 1: attempt1, 2: attempt2, 3: attempt3 };\nconst selected = templates[Math.min(attempt, 3)];\nconst messageText = isArabic ? selected.ar : selected.en;\nconst isFinal = attempt >= 3;\n\nreturn [{\n  json: {\n    message_text: messageText,\n    owner_id: owner.id,\n    conversation_id: owner.conversation_id,\n    phone_wa: owner.phone_wa,\n    chat_id: owner.telegram_id,\n    owner_name: owner.owner_name,\n    attempt_number: attempt,\n    is_final: isFinal,\n    new_status: isFinal ? 'stalled' : 'waiting_reply'\n  }\n}];\n"
+      },
+      "name": "Code — follow-up template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "df7c0ffe-3ecb-4d1d-985c-500af383886f",
+      "notes": "Zero Claude calls. 6 templates hardcoded (3 attempts x EN/AR). Language read from owner.language set by WF3's regex detector. Attempt 3 sets status to stalled."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "owners",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.owner_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "follow_up_count",
+              "fieldValue": "={{ $json.attempt_number }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.new_status }}"
+            },
+            {
+              "fieldId": "last_contact_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase — increment follow-up count",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        704,
+        0
+      ],
+      "id": "a49172e3-f483-4a1d-80f8-61444e9b789d",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Supabase account"
+        }
+      },
+      "notes": "Increments follow_up_count. After attempt 3 sets status=stalled so WF4 stops contacting them."
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "conversation_id",
+              "fieldValue": "={{ $json.conversation_id }}"
+            },
+            {
+              "fieldId": "sender",
+              "fieldValue": "agent"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.message_text }}"
+            },
+            {
+              "fieldId": "conversation_stage",
+              "fieldValue": "follow_up"
+            },
+            {
+              "fieldId": "intent_detected",
+              "fieldValue": "={{ 'follow_up_attempt_' + $json.attempt_number }}"
+            },
+            {
+              "fieldId": "sent_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase — log follow-up",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        896,
+        0
+      ],
+      "id": "d1b1ba85-1a3d-4626-a089-a0faadd49c3f",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.message_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        464,
+        0
+      ],
+      "id": "41d1209c-b4e6-4b27-9313-d947542bedc7",
+      "name": "Send a text message",
+      "webhookId": "dff8d9ad-b4a6-456b-9f5e-13ba7b21d691",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "name": "Schedule — every 1h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        16
+      ],
+      "id": "411fce2f-b5ff-43db-9145-5ea723cb5ba1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $items().length }}",
+              "operation": "larger"
+            }
+          ]
+        }
+      },
+      "name": "Any overdue owners?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        16
+      ],
+      "id": "ebeef4ad-07d4-4fb9-9bc9-3add7dd143a4"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT o.*, c.id as conversation_id, c.state as conversation_state \nFROM owners o \nLEFT JOIN conversations c ON c.owner_id = o.id \nWHERE o.status = 'waiting_reply' \nAND o.last_contact_at < NOW() - INTERVAL '24 hours' \nAND o.follow_up_count < 3 \nAND o.status NOT IN ('human_review', 'won', 'lost') \nORDER BY o.priority_score DESC \nLIMIT 10",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -464,
+        16
+      ],
+      "id": "e49508ed-291f-41ba-b107-81f891b85775",
+      "name": "Get overdue owners",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_API_KEY",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT sender, content, sent_at \nFROM messages \nWHERE conversation_id = '{{ $json.conversation_id }}' \nORDER BY sent_at DESC \nLIMIT 6",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "id": "c257cb95-9c0d-4cbc-886b-3cc11b3f4bf1",
+      "name": "Load recent messages1",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_API_KEY",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "ajlongint.life100@gmail.com, destinationbeautiful00@gmail.com",
+        "subject": "workflow 3 follup halt",
+        "message": "={{ 'Owner stalled after 3 follow-ups — ' + $json.owner_name + $json.chat_id +$json.owner_id}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        320
+      ],
+      "id": "1ef52dbc-ce88-474d-bcfa-e1fc1d34f272",
+      "name": "Send a message",
+      "webhookId": "6862b6a2-a260-4925-b240-991027b15f04",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_API_KEY",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "861bb6d2-0979-42e8-9a17-468fc25b33ca",
+              "leftValue": "increment",
+              "rightValue": "f",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        336
+      ],
+      "id": "8b706b7e-b631-4c03-af49-675085f8f9dc",
+      "name": "If"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code — follow-up template": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase — increment follow-up count": {
+      "main": [
+        [
+          {
+            "node": "Supabase — log follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Supabase — increment follow-up count",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule — every 1h": {
+      "main": [
+        [
+          {
+            "node": "Get overdue owners",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any overdue owners?": {
+      "main": [
+        [
+          {
+            "node": "Load recent messages1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get overdue owners": {
+      "main": [
+        [
+          {
+            "node": "Any overdue owners?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load recent messages1": {
+      "main": [
+        [
+          {
+            "node": "Code — follow-up template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase — log follow-up": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "54c77358-6c7d-4c23-98c9-c175c7796d49",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "tuEcoq9saTo6d9N6",
+  "tags": []
+}

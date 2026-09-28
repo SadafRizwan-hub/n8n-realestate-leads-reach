@@ -1,0 +1,1087 @@
+{
+  "name": "WF3 — Reply Agent (Regex + GPT-4o mini + Claude Sonnet)",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// STEP 1: Language detection — regex, FREE\n// ============================================================\nconst inbound = $('Parse inbound teleg').item.json;\nconst owner = $('load owner + conversation').item.json;\nconst text = inbound.message_text || '';\nconst textLower = text.toLowerCase().trim();\n\nconst hasArabic = /[\\u0600-\\u06FF]/.test(text);\nconst detectedLang = hasArabic ? 'ar' : 'en';\nconst langChanged = detectedLang !== (owner.language || 'en');\n\n// ============================================================\n// STEP 2: Regex intent classification — FREE, <1ms\n// Returns: interested | closing | refused | objection | unknown\n// ============================================================\n\nconst PATTERNS = {\n  refused: [\n    /\\bno\\b/i, /not interested/i, /stop/i, /remove me/i, /don't contact/i,\n    /already sold/i, /not selling/i, /leave me/i, /unsubscribe/i,\n    /لا\\b/, /مش راضي/, /بعت/, /لا تتصل/, /مو مهتم/\n  ],\n  closing: [\n    /title deed/i, /passport/i, /\\beid\\b/i, /send.*form/i, /form a/i,\n    /\\bmou\\b/i, /ready to sign/i, /send.*doc/i, /viewing/i, /photos ready/i\n  ],\n  interested: [\n    /\\byes\\b/i, /\\byep\\b/i, /\\byeah\\b/i, /\\bsure\\b/i, /\\bok\\b/i, /\\bokay\\b/i,\n    /interested/i, /tell me more/i, /go ahead/i, /sounds good/i,\n    /let'?s/i, /definitely/i, /how much/i, /what price/i, /can you/i,\n    /\\bنعم\\b/, /\\bموافق\\b/, /\\bطبعا\\b/, /\\bاوك\\b/, /\\bتمام\\b/, /\\bممتاز\\b/,\n    /tamam/i, /maafi mushkila/i, /zain/i, /wayed/i\n  ],\n  objection: [\n    /already listed/i, /too many agents/i, /busy/i, /wait/i, /later/i,\n    /next year/i, /thinking/i, /commission/i, /\\bfee\\b/i, /who pays/i,\n    /tenant/i, /rented/i, /occupied/i, /trust/i, /prove/i, /why should/i,\n    /مؤجر/, /مش محتاج/, /في وقت لاحق/, /مكلف/, /عمولة/, /كيف أعرف/\n  ]\n};\n\n// --- NEW: negation guard, runs BEFORE the pattern loop ---\nconst negationBefore = /\\b(not|n't|no|never)\\s+(sure|interested|ok|okay)\\b/i;\n\nlet intent = 'unknown';\nif (negationBefore.test(textLower)) {\n  intent = 'objection'; // negated \"sure/interested/ok\" → treat as uncertain, not confirmed interest\n} else {\n  for (const [label, patterns] of Object.entries(PATTERNS)) {\n    if (patterns.some(p => p.test(textLower) || p.test(text))) {\n      intent = label;\n      break; // first match wins — order matters (refused > closing > interested > objection)\n    }\n  }\n}\n\n// Build conversation history text for agent context\nconst history = $('load 10 messages').all().map(i => i.json);\nconst historyText = history.length > 0\n  ? history.reverse().map(m => `[${m.sender.toUpperCase()}]: ${m.content}`).join('\\n')\n  : 'This is the first reply from this owner.';\n\nreturn [{\n  json: {\n    owner_id: owner.id,\n    conversation_id: owner.conversation_id,\n    from_number: inbound.from_number,\n    message_text: text,\n    owner,\n    history_text: historyText,\n    intent,\n    needs_gpt: intent === 'unknown',\n    detected_lang: detectedLang,\n    lang_changed: langChanged,\n    agent_prompt: `OWNER CONTEXT:\\nName: ${owner.owner_name}\\nProperty: ${owner.property_ref || owner.area}\\nArea: ${owner.area}\\nBeds: ${owner.beds || 'N/A'}\\nTransaction: ${owner.transaction_type}\\nLanguage: ${detectedLang}\\nStatus: ${owner.status}\\nConversation state: ${owner.conversation_state || 'outreach'}\\nOwner ID: ${owner.id}\\nConversation ID: ${owner.conversation_id}\\n\\nCONVERSATION HISTORY (oldest to newest):\\n${historyText}\\n\\nOWNER JUST REPLIED:\\n\"${text}\"\\n\\nYOUR TASK:\\n1. Understand the owner's message and intent\\n2. If it is an objection, use the search_objections tool to find the best matching script\\n3. Craft a personalised reply\\n4. Send via send_whatsapp tool\\n5. Update conversation state via update_state tool\\n6. Log both messages via log_message tool\\n\\nThink step by step.`\n  }\n}];"
+      },
+      "name": "Code — regex intent + language detect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1520,
+        464
+      ],
+      "id": "03cc5363-ef70-45b4-8d7f-ac7e5cdb68ba",
+      "notes": "FREE tier. Regex handles ~65-70% of messages. 'unknown' falls through to GPT-4o mini. Language detected by Arabic unicode range — no API needed."
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Code — regex intent + language detect').item.json;\nconst gptRaw = $json.choices?.[0]?.message?.content?.trim().toLowerCase() || 'unknown';\nconst validLabels = ['refused', 'closing', 'agent'];\nconst finalIntent = validLabels.includes(gptRaw) ? gptRaw : 'agent';\n\nreturn [{\n  json: {\n    ...base,\n    intent: finalIntent,\n    intent_source: 'groq'\n  }\n}];"
+      },
+      "name": "Code — merge GPT intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -768,
+        576
+      ],
+      "id": "fbf614a2-662e-4ed2-ba7f-147c5cda2b6b"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "7b9983b8-8a6a-4666-9130-14fc01bdb571",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "refused",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "refused"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "1046bf7c-6636-40f8-82c8-9aeee452d188",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "closing",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "closing"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "ba420932-47b8-42c7-b5bd-fdccc7b2560a",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "unknown",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "agent"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "be934b3b-4f73-458f-b2e1-87d21e9f1e68",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "interested",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "intrested"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "9ed52130-55a8-43a9-8cf0-c5e94ad33ef1",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "objection",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "objection"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "name": "Switch — deterministic tool router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -304,
+        384
+      ],
+      "id": "a3540919-43fd-47ab-88c8-b6b7f61e5e25",
+      "notes": "Zero LLM cost routing. refused→closing template, interested→doc template, closing→doc request, objection/unknown→Reply AI Agent (Claude Sonnet). Tool selection is a lookup, not reasoning."
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst owner = $json.owner;\nconst firstName = (owner.owner_name || 'there').split(' ')[0];\nconst lang = $json.detected_lang;\n\nconst msg = lang === 'ar'\n  ? `تمام ${firstName}، لا مشكلة على الإطلاق. لو تغير رأيك في أي وقت، أنا هنا. يوم سعيد!`\n  : `Completely understood ${firstName} — no pressure at all. If anything changes down the line, I'm always here. Have a great day!`;\n\nreturn [{ json: { ...($json), reply_text: msg, new_status: 'lost', new_state: 'lost', telegram_id:$('Code — regex intent + language detect').first().json.owner.telegram_id,\n    conversation_id: $('Code — regex intent + language detect').first().json.owner.conversation_id,\n    source:           'template' } }];\n"
+      },
+      "name": "Code — refused template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        32
+      ],
+      "id": "8f21d920-2045-448e-800b-a4f214b662c9"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst owner = $json.owner;\nconst firstName = (owner.owner_name || 'there').split(' ')[0];\nconst lang = $json.detected_lang;\n\nconst msg = lang === 'ar'\n  ? `${firstName}، ممتاز! بمجرد ما تكون المستندات جاهزة، ابعثها وأنا أتابع معك فوراً.`\n  : `Perfect ${firstName} — once you have the documents ready just send them over and I'll take it from there straight away.`;\n\nreturn [{\n  json: {\n    reply:            msg,\n    reply_text:       msg,\n    new_state:        'doc_collection',\n    new_status:       'active',\n    telegram_id: $('Code — regex intent + language detect').first().json.owner.telegram_id,\n    conversation_id: $('Code — regex intent + language detect').first().json.owner.conversation_id,\n    source:      'template'\n  }\n}];\n"
+      },
+      "name": "Code — closing template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        272
+      ],
+      "id": "36724f40-2214-4e4d-945c-1cdad151dbdf"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "owners",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "telegram_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code in JavaScript1').item.json.telegram_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $('Code in JavaScript1').item.json.new_state }}"
+            },
+            {
+              "fieldId": "last_contact_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase — update state (template path)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1472,
+        352
+      ],
+      "id": "f296113e-73b7-4b44-a885-507f4f0ca8fa",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "sender",
+              "fieldValue": "={{ $('Code in JavaScript1').item.json.source }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Code in JavaScript1').item.json.reply }}"
+            },
+            {
+              "fieldId": "intent_detected",
+              "fieldValue": "={{ $('Code in JavaScript1').item.json.intent_detected }}"
+            },
+            {
+              "fieldId": "conversation_stage",
+              "fieldValue": "={{ $('Code in JavaScript1').item.json.new_state }}"
+            },
+            {
+              "fieldId": "sent_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase — log template reply",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2048,
+        352
+      ],
+      "id": "de9ed02c-31eb-4239-8979-203332e0fc82",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1952,
+        80
+      ],
+      "id": "d8e75de2-45ae-4378-924d-3e695e4e712a",
+      "name": "Telegram Trigger",
+      "webhookId": "8e3c5fb0-b9fc-4e86-9548-047a7df130c5",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst item = items[0];\nconst msg = item.json.message;\n\nif (!msg?.text) return [];\n\nreturn [{\n  json: {\n    tele_chat_id: String(msg.chat.id),  \n    message_text: msg.text,\n    wa_message_id: String(msg.message_id),\n    timestamp: String(msg.date)\n  }\n}];"
+      },
+      "name": "Parse inbound teleg",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1696,
+        80
+      ],
+      "id": "a4ed54ae-5408-4d0b-b784-4464807dcfc5"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM messages \nWHERE conversation_id = '{{ $json.conversation_id }}'\nORDER BY sent_at DESC \nLIMIT 10;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1072,
+        80
+      ],
+      "id": "fdd232b6-72d5-4188-9e8e-5b5d63677e8d",
+      "name": "load 10 messages",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT o.*, c.id as conversation_id, c.state as conversation_state \nFROM owners o \nLEFT JOIN conversations c ON c.owner_id = o.id AND c.channel = 'telegram' \nWHERE o.telegram_id = {{ $json.tele_chat_id }}::text\nLIMIT 1\n\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1392,
+        80
+      ],
+      "id": "33a4738e-8eba-4ccc-bde9-82233319ac76",
+      "name": "load owner + conversation",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "da3f9c1d-d8e2-4fdd-9113-e8605181dfcb",
+              "leftValue": "={{ $('load owner + conversation').item.json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -592,
+        448
+      ],
+      "id": "08f0bc64-41d3-4a90-8fb0-973efc0c893a",
+      "name": "owner known?"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1232,
+        352
+      ],
+      "id": "c94eddd5-3eaf-4634-893f-fda083f98dc6",
+      "name": "Send a text message",
+      "webhookId": "b1b99e28-6c6c-4efe-8f66-384a348a9f1d",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "conversations",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code in JavaScript1').item.json.conversation_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "state",
+              "fieldValue": "={{ $('Code in JavaScript1').item.json.new_state }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1728,
+        352
+      ],
+      "id": "8666eb06-6f70-4bf0-a12b-b611a72cf037",
+      "name": "Update conversation table",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.agent_prompt }}",
+        "options": {
+          "systemMessage": "=You are Sasha, a professional Dubai real estate agent handling Telegram conversations with property owners to get them to list their property with you.\n\n=== PRE-PROCESSED CONTEXT — DO NOT RE-ANALYSE ===\nIntent and language have already been classified before reaching you.\nYour only job is to craft the best reply using the context below.\n\n=== OWNER CONTEXT ===\nName: {{ $json.owner.owner_name }}\nProperty: {{ $json.owner.property_type }} {{ $json.owner.property_ref }}\nArea: {{ $json.owner.area }}\nBeds: {{ $json.owner.beds }}\nCurrent State: {{ $json.owner.conversation_state }}\nTelegram Chat ID: {{ $json.owner.telegram_id }}\nConversation ID: {{ $json.conversation_id }}\nDetected Intent: {{ $json.intent }}\nLanguage: {{ $json.owner.language }}\n\n=== CORE BEHAVIOUR ===\n- Fully human in tone — never mention AI, automation, or systems\n- Address owner by first name only\n- Reply in {{ $json.owner.language }} — match exactly how the owner writes\n- Keep replies under 4 lines — Telegram style, casual, never formal\n- Be empathetic before being persuasive\n- Never copy objection scripts verbatim — adapt them to sound like you\n- RERA compliant: never make false price guarantees or invent market numbers\n\n=== DECISION LOGIC — based on Detected Intent above ===\n\nintent = \"interested\" or \"question\"\n→ Ask one warm qualifying question relevant to their reply\n→ Do NOT call search_objections\n\nintent = \"objection\" or \"unknown\"\n→ Call search_objections first\n→ Adapt the result — never copy verbatim\n→ Craft your reply using the retrieved script as a guide\n\nintent = \"refused\" or \"closing\"\n→ You should not reach here — template handles this\n→ If you do: send one graceful closing line only, set new_state to \"lost\"\n→ Do NOT call search_objections\n\nintent = \"complex\"\n→ Call flag_for_human immediately\n→ Do not craft any reply — leave reply field empty\n\n=== JOURNEY STAGES — move forward only, never backwards ===\nwaiting_reply → build rapport, ask about unit type and bedrooms\nqualification → owner shared unit info, confirm if they want to sell\nintent_confirmed → owner confirmed interest, NOW ask for title deed and EID\nlost → owner refused, stop all contact\n\nCurrent state: {{ $json.owner.conversation_state }}\n\n=== TOOL RULES ===\nsearch_objections → call ONLY when intent is \"objection\" or \"unknown\". Any other intent = do not call.\nget_market_data → call ONLY when owner asks a specific market or price question\nflag_for_human → call ONLY when situation is genuinely too complex to handle\n\n=== OUTPUT ===\nReturn only this JSON, nothing else:\n{\n  \"reply_text\": \"your crafted message to the owner\",\n  \"new_state\": \"waiting_reply | qualification | intent_confirmed | lost\",\n  \"intent\": \"{{ $json.intent }}\",\n  \"conversation_id\": \"{{ $json.conversation_id }}\"\n}\n\nIf search_objections returns found_match: false,do NOT say you don't understand or go silent. Instead, use your own understanding of Dubai real estate objections and the conversation history to write a natural, reassuring, personalised reply that addresses the owner's underlying concern, then gently move the conversation forward (e.g. ask a clarifying question or offer a next step).\n\nIf get_market_data returns found: false, do NOT say you have no data. \nAcknowledge the question warmly, note pricing varies by unit/condition, \nand steer back to getting their specific unit details instead."
+        }
+      },
+      "name": "Reply AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        368,
+        656
+      ],
+      "id": "1d5b97c6-1ecf-4d14-a127-271116782f26",
+      "notes": "THE MAIN AGENT. Claude reads full context, decides intent, calls tools in the right order. The system prompt defines all decision logic."
+    },
+    {
+      "parameters": {
+        "name": "search_objections",
+        "description": "Search the objection knowledge base for the best matching response script when an owner raises an objection. Input: the owner's exact objection text. Returns: the best matching AI script and follow-up question.",
+        "workflowId": "HVaF7hlraXUk9TJT",
+        "fields": {
+          "values": [
+            {
+              "name": "objection_text",
+              "stringValue": "={{ $fromAI('objection_text', 'The exact text of the owner objection to search for', 'string') }}"
+            },
+            {
+              "name": "category_hint",
+              "stringValue": "={{ $fromAI('category_hint', 'Optional: likely category e.g. listing_refusal, price_commission, trust_credibility', 'string') }}"
+            }
+          ]
+        }
+      },
+      "name": "Tool: search_objections",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        560,
+        1088
+      ],
+      "id": "ff341d76-93aa-4ad7-973c-82027a3693f1",
+      "notes": "Calls the objection search sub-workflow. Replace OBJECTION_SEARCH_WORKFLOW_ID with actual ID after creating that sub-workflow."
+    },
+    {
+      "parameters": {
+        "name": "flag_for_human",
+        "description": "Use this when the conversation is too complex, sensitive, or unusual for you to handle. This will alert the human agent to take over. Input: reason why you are flagging and a summary of the situation.",
+        "workflowId": "oPFYYiT1QUCldtp3",
+        "fields": {
+          "values": [
+            {
+              "name": "owner_id",
+              "stringValue": "={{ $fromAI('owner_id', 'Owner UUID', 'string') }}"
+            },
+            {
+              "name": "reason",
+              "stringValue": "={{ $fromAI('reason', 'Why you are flagging this conversation for human review', 'string') }}"
+            },
+            {
+              "name": "summary",
+              "stringValue": "={{ $fromAI('summary', 'Brief summary of the conversation and current situation', 'string') }}"
+            }
+          ]
+        }
+      },
+      "name": "Tool: flag_for_human",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        912,
+        1104
+      ],
+      "id": "d8eb44c3-3d0d-4479-a7a1-ecd09db4ae69"
+    },
+    {
+      "parameters": {
+        "name": "get_market_data",
+        "description": "Look up current market price data for a specific area and bedroom count. Use when you need to mention a price figure in your reply.",
+        "workflowId": "BytQYE435Fabr2cg",
+        "fields": {
+          "values": [
+            {
+              "name": "area",
+              "stringValue": "={{ $fromAI('area', 'Area name: JVC, Arjan, JLT, Downtown, or Business Bay', 'string') }}"
+            },
+            {
+              "name": "beds",
+              "stringValue": "={{ $fromAI('beds', 'Number of bedrooms as integer, 0 for studio', 'string') }}"
+            }
+          ]
+        }
+      },
+      "name": "Tool: get_market_data",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1184,
+        1120
+      ],
+      "id": "4b0102c2-5456-43f0-a882-8a66262520a0"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d562cbd6-3030-4207-af0e-47d51679b4a6",
+              "leftValue": "={{ $json.intent }}",
+              "rightValue": "unknown",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1232,
+        480
+      ],
+      "id": "ee8d646e-dedb-416d-bd11-46f6c2c0ba7b",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "sendTo": "ajlongint.life100@gmail.com, destinationbeautiful00@gmail.com",
+        "subject": "Owner Unknown",
+        "emailType": "text",
+        "message": "= {{ $('Code — regex intent + language detect').item.json.owner.telegram_id }}, {{ $('HTTP Request').item.json.owner.telegram_id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -320,
+        752
+      ],
+      "id": "4cc8a6a3-95cb-4da6-b531-5190c6104c7f",
+      "name": "Send a message",
+      "webhookId": "ddff46af-9dd8-455f-8e79-f4071d11b35b",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Code — regex intent + language detect').item.json.conversation_id }}"
+      },
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1,
+      "position": [
+        336,
+        1168
+      ],
+      "id": "d9e41d5f-e979-4808-9571-792fa95e98f1",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Stores agent reasoning steps in Postgres (Supabase). Session key is per conversation_id so each owner thread is isolated."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.1-8b-instant\",\n  \"temperature\": 0,\n  \"max_tokens\": 20,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You classify real estate owner replies into exactly one of three intents. Reply with ONLY the intent word, nothing else.\\n\\nrefused = owner is clearly rejecting, not interested, asking to stop\\nclosing = owner is explicitly ready to list, sign, share documents, meet agent\\nagent = everything else including curiosity, questions, soft interest, maybe, let's see, objections, price questions\\n\\nWhen in doubt → agent\"\n    },\n    {\n      \"role\": \"user\", \n      \"content\": \"Owner replied:{{ $('Parse inbound teleg').item.json.message_text }}\\nOwner current state: {{ $('load owner + conversation').item.json.conversation_state }}\\n\\nClassify:\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1024,
+        560
+      ],
+      "id": "e3d39a9b-ad32-469b-9815-6cfc4752ffb7",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Bearer Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash-001",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        -1984,
+        1824
+      ],
+      "id": "029dd0f4-1c13-4e6d-8882-4d2bbcdf562e",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3.8-27b",
+        "options": {
+          "maxTokensToSample": 1800
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        1808
+      ],
+      "id": "56225cb3-63a0-499b-bf67-b35995d6589e",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.output;\n\nlet parsed;\ntry {\n  // Agent sometimes wraps JSON in explanation text — extract just the JSON block\n  const jsonMatch = typeof raw === 'string' \n    ? raw.match(/\\{[\\s\\S]*\\}/) \n    : null;\n    \n  const jsonString = jsonMatch ? jsonMatch[0] : raw;\n  parsed = typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString;\n} catch (e) {\n  parsed = {};\n}\n\nreturn [{\n  json: {\n    reply_text:            parsed.reply_text            || '',\n    new_state:        parsed.new_state        || 'waiting_reply',\n    intent:  parsed.intent || 'unknown',\n    conversation_id:  parsed.conversation_id  || $('Code — regex intent + language detect').first().json.conversation_id,\n    telegram_id:     $('Code — regex intent + language detect').first().json.owner.telegram_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        656
+      ],
+      "id": "d481594f-48e9-41df-8055-1c36df2cd3b2",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst reply           = input.reply        || input.message   || input.reply_text || '';\nconst telegram_id    = input.telegram_id || input.chat_id   || '';\nconst new_state       = input.new_state    || input.state     || 'waiting_reply';\nconst conversation_id = input.conversation_id                 || '';\nconst intent_detected = input.intent_detected || input.intent || 'unknown';\nconst source          = input.source       || 'agent';\n\nreturn [{\n  json: {\n    reply,\n    telegram_id,\n    new_state,\n    conversation_id,\n    intent_detected,\n    source,\n    // Debug flags — remove once stable\n    warn_empty_reply:   !reply           ? true : false,\n    warn_missing_chat:  !telegram_id   ? true : false\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        352
+      ],
+      "id": "4bbfb96e-327f-4f8a-bbd2-b72a16e50ed2",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 800
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        160,
+        992
+      ],
+      "id": "3683d9f5-35af-44b0-9fd4-ca8683efc01e",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "OpenAI account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code — regex intent + language detect": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch — deterministic tool router": {
+      "main": [
+        [
+          {
+            "node": "Code — refused template",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code — closing template",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — refused template": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — closing template": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase — update state (template path)": {
+      "main": [
+        [
+          {
+            "node": "Update conversation table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse inbound teleg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse inbound teleg": {
+      "main": [
+        [
+          {
+            "node": "load owner + conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "load 10 messages": {
+      "main": [
+        [
+          {
+            "node": "Code — regex intent + language detect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "load owner + conversation": {
+      "main": [
+        [
+          {
+            "node": "load 10 messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "owner known?": {
+      "main": [
+        [
+          {
+            "node": "Switch — deterministic tool router",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Supabase — update state (template path)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update conversation table": {
+      "main": [
+        [
+          {
+            "node": "Supabase — log template reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: search_objections": {
+      "ai_tool": [
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: flag_for_human": {
+      "ai_tool": [
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: get_market_data": {
+      "ai_tool": [
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — merge GPT intent": {
+      "main": [
+        [
+          {
+            "node": "owner known?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "owner known?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        []
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code — merge GPT intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Reply AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Reply AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "c3b8356b-bfeb-4ad7-9ca3-0eb848420bb0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "RPA7SqBlOQ2lfuVT",
+  "tags": []
+}

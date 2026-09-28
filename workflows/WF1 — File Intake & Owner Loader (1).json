@@ -1,0 +1,206 @@
+{
+  "name": "WF1 — File Intake & Owner Loader",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction findKey(obj, candidates) {\n  const keys = Object.keys(obj);\n  for (const c of candidates) {\n    const match = keys.find(k => k.toLowerCase().includes(c.toLowerCase()));\n    if (match !== undefined && obj[match] !== null && obj[match] !== undefined) return String(obj[match]).trim();\n  }\n  return null;\n}\n\nfunction parsePhone(raw) {\n  if (!raw) return null;\n  const str = String(raw).replace(/\\s/g, '');\n  const match = str.match(/^(97\\d)\\|?(.+)$/);\n  if (match) {\n    const code   = match[1];\n    const number = match[2].replace(/\\D/g, '');\n    if (number.length < 6) return null;\n    return { code, number, full: code + number };\n  }\n  const digits = str.replace(/\\D/g, '');\n  if (digits.length < 6) return null;\n  return { code: null, number: digits, full: digits };\n}\n\nfunction bestPhone(row) {\n  const candidates = [\n    findKey(row, ['Mobile 1', 'mobile1', 'mobile_1']),\n    findKey(row, ['Phone 1',  'phone1',  'phone_1']),\n    findKey(row, ['Mobile 2', 'mobile2', 'mobile_2']),\n    findKey(row, ['Phone 2',  'phone2',  'phone_2']),\n    findKey(row, ['Secondary Mobile', 'sec_mobile', 'secondary']),\n  ];\n  const seen = new Set();\n  for (const raw of candidates) {\n    const parsed = parsePhone(raw);\n    if (!parsed) continue;\n    if (seen.has(parsed.number)) continue;\n    seen.add(parsed.number);\n    return parsed;\n  }\n  return null;\n}\n\nconst results = [];\nfor (const item of items) {\n  const row = item.json;\n  const vals = Object.values(row).filter(v => v !== null && v !== undefined && String(v).trim() !== '');\n  if (vals.length === 0) continue;\n  const phone = bestPhone(row);\n  results.push({\n    json: {\n      owner_name:          findKey(row, ['Owner Name', 'owner']),\n      phone_country_code:  phone ? phone.code : null,\n      phone_wa:            phone ? phone.full : null,\n      sms_number:          phone ? phone.full : null,\n      email:               findKey(row, ['Email', 'email']) || '',\n      language:            'en',\n      property_ref:        findKey(row, ['Property Number', 'property_ref', 'ref']),\n      area:                findKey(row, ['Master Location', 'location', 'area']),\n      project:             findKey(row, ['Master Project', 'project']),\n      building:            findKey(row, ['Building 1', 'building']),\n      unit_number:         findKey(row, ['UnitNumber', 'unit_number', 'unit']),\n      property_type:       findKey(row, ['PropertyType', 'property_type', 'type']),\n      beds:                findKey(row, ['Beds', 'bedrooms', 'bed']),\n      transaction_amount:  findKey(row, ['Transaction Amount', 'transaction', 'amount', 'price']),\n      actual_size:         findKey(row, ['Actual Size', 'actual_size', 'size']),\n      completion_status:   findKey(row, ['Completion Status', 'status']),\n      telegram_id:         findKey(row, ['telegram_id', 'Telegram ID', 'telegram']),\n    }\n  });\n}\n\nreturn results;"
+      },
+      "name": "Code — detect, clean, score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        176
+      ],
+      "id": "ddc75587-0bf3-414a-83b4-e4f680c47c3e",
+      "notes": "IMPORTANT: Place an 'Extract from File' node + 'Split Out' node BEFORE this if input is XLSX/CSV binary. For DOCX, use 'Extract from File' to get text, then parse. This node handles already-row-split JSON data."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.owner_name }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "Filter — skip empty rows",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [
+        640,
+        176
+      ],
+      "id": "9c33d874-0049-4e15-bb20-34ec7474bb61"
+    },
+    {
+      "parameters": {
+        "formTitle": "Owners listing",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "submit_file",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -32,
+        176
+      ],
+      "id": "5b2d6d79-4986-413e-b880-34c8e255c56e",
+      "name": "On form submission",
+      "webhookId": "f8c0ade0-8bf2-461e-b933-b5a08227af5c"
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "=submit_file",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        192,
+        176
+      ],
+      "id": "aa73b06c-03df-4278-b09e-a9414088cab9",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "content": "## changes required\ngeneral mapping of columns -- DONE\n\nable to to choose which file type it is and extract information \nor\nto make it cost effective fix the file type",
+        "height": 192,
+        "width": 288
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -896,
+        624
+      ],
+      "typeVersion": 1,
+      "id": "9681bb62-cc67-4392-a5df-be0250f1dea1",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "tableId": "owners",
+        "dataToSend": "autoMapInputData"
+      },
+      "name": "Supabase — write owners",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        848,
+        176
+      ],
+      "id": "8f7f17df-b0bc-436f-9649-58f756ed3d31",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "notes": "Conflict key: phone_wa. If same number re-uploaded, updates the record but does NOT reset status (so an active conversation isn't overwritten). Add conflict handling: only update if status='new'."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Form Submitted Successfully",
+        "completionMessage": "File received successfully. Owners are being processed",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1056,
+        176
+      ],
+      "id": "7aceb019-83e5-4ad8-8398-f3930bedf8d7",
+      "name": "Form",
+      "webhookId": "08f78f68-54fc-4195-b649-cd7b8fb501d0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code — detect, clean, score": {
+      "main": [
+        [
+          {
+            "node": "Filter — skip empty rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter — skip empty rows": {
+      "main": [
+        [
+          {
+            "node": "Supabase — write owners",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Code — detect, clean, score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase — write owners": {
+      "main": [
+        [
+          {
+            "node": "Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "6f7da262-2950-4b42-bea0-2e0afb255c1c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "9VQEBtMRDrtpZaeV",
+  "tags": []
+}

@@ -1,0 +1,160 @@
+{
+  "name": "Tool Sub-Workflow — update_state",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "68edc52a-5755-4783-aae5-4371f726e190"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true, updated_status: $('Execute Workflow Trigger').item.json.new_status, updated_state: $('Execute Workflow Trigger').item.json.new_state } }];"
+      },
+      "name": "Return result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "e5c6e6e1-02e1-46f4-82d1-2963aa2e8a72"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "conversations",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Execute Workflow Trigger').item.json.conversation_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "state",
+              "fieldValue": "={{ $json.status }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        432,
+        0
+      ],
+      "id": "8670ea32-209a-4875-ae34-e41202013601",
+      "name": "Update conversation table",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "owners",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.owner_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.new_status }}"
+            },
+            {
+              "fieldId": "last_contact_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "fieldId": "follow_up_count",
+              "fieldValue": "=0"
+            }
+          ]
+        }
+      },
+      "name": "Supabase — update state",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ],
+      "id": "b35ce524-9776-4f73-a03a-38a8681b3dd5",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_API_KEY",
+          "name": "Supabase account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Supabase — update state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update conversation table": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase — update state": {
+      "main": [
+        [
+          {
+            "node": "Update conversation table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "f3ec000b-7d57-4dd9-89c2-9b14e26e0d5d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "g2aNEnEAuwnCPCaK",
+  "tags": []
+}

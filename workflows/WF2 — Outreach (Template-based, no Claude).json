@@ -1,0 +1,345 @@
+{
+  "name": "WF2 — Outreach (Template-based, no Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "\n// ============================================================\n// TEMPLATE-BASED FIRST MESSAGE — NO CLAUDE CALL\n// Picks from 4 template variants per transaction type.\n// Injects: first name, area, beds, market price point.\n// Language detection via regex — no API needed.\n// ============================================================\n\nconst owner = $json;\nconst firstName = (owner.owner_name || 'there').split(' ')[0];\nconst area = owner.area || 'Dubai';\nconst beds = owner.beds ? owner.beds + 'BR ' : '';\nconst property = owner.property_ref || (beds + area);\nconst txType = (owner.transaction_type || 'Sale').toLowerCase();\n\n// Language detection — regex, free, instant\nconst hasArabic = /[\\u0600-\\u06FF]/.test(owner.owner_name || '');\nconst lang = hasArabic ? 'ar' : 'en';\n\n// Market data point — pick the most relevant single number\nlet marketLine = '';\nif (owner.avg_sale_price && txType === 'sale') {\n  marketLine = `Units in ${area} are currently moving at AED ${Number(owner.avg_sale_price).toLocaleString()} on average.`;\n} else if (owner.avg_rent_annual && txType === 'rental') {\n  marketLine = `Rentals in ${area} are achieving AED ${Number(owner.avg_rent_annual).toLocaleString()}/year right now.`;\n} else if (owner.avg_price_sqft) {\n  marketLine = `${area} is currently averaging AED ${Number(owner.avg_price_sqft).toLocaleString()}/sqft.`;\n}\n\n// ---- ENGLISH TEMPLATES (4 variants, rotate by day of week) ----\nconst enTemplates = [\n  `Hi ${firstName}, I noticed your ${property} and wanted to reach out — I specialise in this area and currently have active buyers looking. ${marketLine} Would you consider listing? Happy to share more.`,\n  `Hey ${firstName} — I work with buyers specifically looking in ${area} right now. ${marketLine} If you've thought about selling, this could be good timing. Worth a quick chat?`,\n  `Hi ${firstName}, I'm a local agent focused on ${area} and I have a few serious buyers who've been asking about ${beds}units there. ${marketLine} Would you be open to a conversation?`,\n  `${firstName}, quick question — are you open to listing your ${property}? I have buyers actively searching in ${area}. ${marketLine} No pressure, just wanted to check.`\n];\n\n// ---- ARABIC TEMPLATES (4 variants) ----\nconst arTemplates = [\n  `مرحبا ${firstName}، أنا متخصص في منطقة ${area} وعندي مشترين جادين الحين. ${marketLine} هل تفكر في البيع؟ يسعدني أشارك معك التفاصيل.`,\n  `السلام عليكم ${firstName}، عندي عملاء يبحثون عن وحدات في ${area} بالضبط. ${marketLine} لو مهتم نتكلم، ما في أي إلزام.`,\n  `هلا ${firstName}، أعمل في ${area} ومعي مشترين يسألون عن ${beds}. ${marketLine} هل أنت مهتم بالبيع هذه الفترة؟`,\n  `${firstName}، سؤال سريع — هل تفكر في تأجير أو بيع ${property}؟ السوق في ${area} نشيط الحين. يسعدني أساعدك.`\n];\n\nconst templates = lang === 'ar' ? arTemplates : enTemplates;\nconst variant = new Date().getDay() % templates.length; // rotate daily\nconst messageText = templates[variant];\n\n// Channel priority: WhatsApp > Email > SMS\nconst channel = owner.phone_wa ? 'whatsapp' : (owner.email ? 'email' : 'sms');\n\nreturn [{\n  json: {\n    message_text: messageText,\n    owner_id: owner.id,\n    owner_name: owner.owner_name,\n    first_name: firstName,\n    phone_wa: owner.phone_wa,\n    email: owner.email,\n    sms_number: owner.sms_number,\n    area: owner.area,\n    language: lang,\n    channel,\n    variant_id: 'tmpl_v' + variant,\n    // Update language detected via regex back to Supabase\n    detected_language: lang\n  }\n}];\n"
+      },
+      "name": "Code — build message from template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        1312
+      ],
+      "id": "fc4b3fbe-9509-4e5c-9fb0-259e8c2ba02f",
+      "notes": "Zero Claude calls. Picks template variant, injects owner name + area + market data point. Language detected by Arabic regex on owner name."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  o.*, \n  m.avg_sale_price, \n  m.avg_rent_annual, \n  m.avg_price_sqft, \n  m.data_date\nFROM owners o \nLEFT JOIN market_data m \n  ON m.area = o.area \n  AND m.beds = o.beds \n  AND m.building_name IS NULL\nWHERE o.status = 'new' \nORDER BY o.priority_score DESC \nLIMIT 5",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -128,
+        1424
+      ],
+      "id": "60277c09-d942-446e-afbe-7eebadcc2c90",
+      "name": "Execute a SQL query",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute a SQL query').item.json.telegram_id }}",
+        "text": "={{ $json.message_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        608,
+        1408
+      ],
+      "id": "4c516f60-1b97-4366-8e9e-fed980c30649",
+      "name": "Send a text message",
+      "webhookId": "b1b99e28-6c6c-4efe-8f66-384a348a9f1d",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "owners",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Code — build message from template').item.json.owner_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "waiting_reply"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "name": "update owners table",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        848,
+        1408
+      ],
+      "id": "bbdbee3f-11d6-4cd4-8750-37a434ef783a",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "notes": "Updates status AND language detected by regex. No extra API call needed."
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "sender",
+              "fieldValue": "agent"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Code — build message from template').item.json.message_text }}"
+            },
+            {
+              "fieldId": "conversation_stage",
+              "fieldValue": "outreach"
+            },
+            {
+              "fieldId": "intent_detected",
+              "fieldValue": "outreach_first_message"
+            },
+            {
+              "fieldId": "turn_number",
+              "fieldValue": "1"
+            },
+            {
+              "fieldId": "sent_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "fieldId": "conversation_id",
+              "fieldValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "name": "log messages",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        1408
+      ],
+      "id": "10f1df1c-e00f-4c80-a2ce-ab61743020d0",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -384,
+        1424
+      ],
+      "id": "48482720-09cf-4c92-af30-1ee0c68c27fe"
+    },
+    {
+      "parameters": {
+        "tableId": "conversations",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "owner_id",
+              "fieldValue": "={{ $('Code — build message from template').item.json.owner_id }}"
+            },
+            {
+              "fieldId": "channel",
+              "fieldValue": "telegram"
+            },
+            {
+              "fieldId": "state",
+              "fieldValue": "={{ $json.status }}"
+            },
+            {
+              "fieldId": "variant_id",
+              "fieldValue": "={{ $('Code — build message from template').item.json.variant_id }}"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $json.created_at }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1056,
+        1408
+      ],
+      "id": "c1a3ea7f-7e98-4e70-b24b-b3c94fa42060",
+      "name": "create conversation table",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $items().length }}",
+              "operation": "larger"
+            }
+          ]
+        }
+      },
+      "name": "Any owners to contact?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        80,
+        1440
+      ],
+      "id": "d11af8a1-9a47-4d14-a486-88cb610b007e"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code — build message from template": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Any owners to contact?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "update owners table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "update owners table": {
+      "main": [
+        [
+          {
+            "node": "create conversation table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log messages": {
+      "main": [
+        []
+      ]
+    },
+    "create conversation table": {
+      "main": [
+        [
+          {
+            "node": "log messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any owners to contact?": {
+      "main": [
+        [
+          {
+            "node": "Code — build message from template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "e43b4d30-293f-4da4-841b-536a0494eaab",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5a4a1564f7c7bd06f1fd64cea644d019b689212ea26cbdbe9fe8bc98f3bed57f"
+  },
+  "nodeGroups": [],
+  "id": "t8a6zPbLrz6UEQJM",
+  "tags": []
+}
